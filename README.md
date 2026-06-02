@@ -29,7 +29,7 @@ AI-enhanced adaptive PID reflow oven temperature controller for the T962A oven, 
 |---|---|
 | MCU | ESP32 WROOM (ESP32 Dev Module) |
 | Oven | T962A reflow oven (or similar converted toaster oven) |
-| Thermocouples | 2x K-type with analog amplifier ICs (AD595/LT1025) |
+| Thermocouples | 2x K-type with analog amplifier ICs (AD8495) |
 | External ADC | ADS1015 12-bit 4-channel I2C ADC for linearity |
 | SSR (heater) | Zero-crossing solid-state relay for heating elements |
 | SSR (cooling fan) | Zero-crossing solid-state relay for oven cooling fan |
