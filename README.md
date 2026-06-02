@@ -1,6 +1,6 @@
 # Adaptive PID Reflow Oven Controller
 
-AI-enhanced adaptive PID reflow oven temperature controller for the T962A oven, built on ESP32 WROOM with dual-core FreeRTOS architecture. Supports reflow soldering and baking/drying profiles.
+AI-enhanced adaptive PID reflow oven temperature controller for the T962A oven, built on ESP32 WROOM with dual-core FreeRTOS architecture. Supports reflow soldering and baking/drying profiles. **BEWARE, NOT TESTED ON HARDWARE YET**
 
 ## Features
 
