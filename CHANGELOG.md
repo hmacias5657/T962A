@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-06-04
+
+### Added
+- **I2C mutex for thread-safe ADC access**: `xSemaphoreCreateMutex()` protects all `Adafruit_ADS1015` calls in `TemperatureReader`. 50ms timeout sets `_i2cError` flag on lock failure, triggering emergency stop (error code 4, "I2C Bus Error") via `hasI2cError()` safety check in control loop.
+- **I2C error indicator on live plot**: `ThermalTelemetry.i2cError` shown as "I2C!" warning on the running temperature plot.
+- **Plant Model viewer**: New calibration menu item (5th option) displays per-zone heating rate, cooling rate, and deadtime — the global plant model measured during Cal Run.
+- **Line frequency in Settings**: Settings screen now shows the measured AC line frequency (e.g. "Line: 60.0 Hz") for diagnostic visibility.
+
+### Changed
+- Calibration menu expanded from 4 to 5 items (added "Plant Model" between "View Gains" and "Cal Run").
+- `renderSettings()` signature extended with `float lineFreq` parameter.
+- Error screen updated: code 3 = "TC Delta > 45C", code 4 = "I2C Bus Error".
+
+### Fixed
+- `BresenhamPID.cpp`: Replaced `esp_timer_get_time()` with `micros()` in ZC ISR calibration timing (incomplete port from ESP-IDF).
+- Removed `PortingPlan.md` (porting guide, no longer needed).
+
 ## [2.0.0] — 2026-06-03
 
 ### Added

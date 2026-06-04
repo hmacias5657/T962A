@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define FIRMWARE_VERSION "2.0.0"
+#define FIRMWARE_VERSION "2.1.0"
 
 // T962A pin mappings (ESP32 WROOM)
 #define PIN_ZC_INTERRUPT       GPIO_NUM_4

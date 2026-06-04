@@ -206,6 +206,16 @@ Flash: 5.4%  (355121 / 6553600 bytes)
 - `Config.h`: Removed `AC_FREQ_HZ`, `BRESENHAM_WINDOW_MS`, `PID_TIME_STEP_S`, `ZC_HALF_CYCLE_US_DEFAULT`; added `DEFAULT_FREQ_HZ`
 - `BresenhamPID`: `calibrateLineFrequency()`, `CAL_CYCLES=40`, `setMeasuredFrequency()`/`getMeasuredFrequency()`
 
+#### v2.1.0 — I2C Mutex, Plant Model Viewer, Line Frequency in Settings
+- **I2C mutex**: `xSemaphoreCreateMutex()` in `TemperatureReader` protects ADC reads between cores; 50ms timeout sets `_i2cError` flag on lock failure → triggers emergency stop (errorCode=4)
+- **I2C error indicator**: "I2C!" warning shown on live temperature plot when `ThermalTelemetry.i2cError` is true
+- **Plant Model viewer**: New calibration menu item (index 3, "Plant Model") displays per-zone heating rate, cooling rate, and deadtime from the global NVS plant model
+- **Line frequency in Settings**: Settings screen now shows the measured AC line frequency
+- **Calibration expanded to 5 items**: TC1 Off, TC2 Off, View Gains, Plant Model, Cal Run
+- **Fixed**: `esp_timer_get_time()` → `micros()` in ZC ISR (incomplete port from PortingPlan §5.3)
+- **Config.h**: `FIRMWARE_VERSION` 2.1.0
+- **Removed**: `PortingPlan.md` (porting guide no longer needed)
+
 #### v2.0.0 — EMA Filtering, Feedforward Control, Plant Model Calibration
 - **EMA temperature filter**: `TemperatureReader` applies α=0.15 EMA on each TC reading; removes ~85% of high-frequency LSB noise before it reaches PID derivative term; filter resets on each cycle start; fault detection still reads raw value
 - **Target ramp rate**: `ProfileEngine::getTargetRampRate()` returns °C/s of the desired profile at any elapsed second; used as feedforward input
