@@ -509,6 +509,7 @@ void core0ControlLoop(void *pvParameters) {
                 telemetry.currentStage = stage;
                 telemetry.systemState = state;
                 telemetry.errorCode = 0;
+                telemetry.i2cError = tempReader.hasI2cError();
 
                 xQueueOverwrite(telemetryQueue, &telemetry);
 
@@ -570,6 +571,7 @@ void core0ControlLoop(void *pvParameters) {
                 telemetry.currentStage = stage;
                 telemetry.systemState = state;
                 telemetry.errorCode = 0;
+                telemetry.i2cError = tempReader.hasI2cError();
 
                 xQueueOverwrite(telemetryQueue, &telemetry);
 
@@ -618,6 +620,7 @@ void core0ControlLoop(void *pvParameters) {
                 telemetry.currentStage = STAGE_SOAK;
                 telemetry.systemState = state;
                 telemetry.errorCode = 0;
+                telemetry.i2cError = tempReader.hasI2cError();
 
                 xQueueOverwrite(telemetryQueue, &telemetry);
 
@@ -721,6 +724,7 @@ void core0ControlLoop(void *pvParameters) {
                 telemetry.currentStage = calStage;
                 telemetry.systemState = state;
                 telemetry.errorCode = 0;
+                telemetry.i2cError = tempReader.hasI2cError();
 
                 xQueueOverwrite(telemetryQueue, &telemetry);
 
@@ -735,6 +739,12 @@ void core0ControlLoop(void *pvParameters) {
             }
 
             xSemaphoreGive(recipeMutex);
+        }
+
+        if (tempReader.hasI2cError()) {
+            currentSystemState = STATE_ERROR;
+            currentErrorCode = 4;
+            bresenhamPID.emergencyStop();
         }
 
         checkSafety(tempData);
@@ -770,7 +780,8 @@ void core1UITask(void *pvParameters) {
                     && menuState != MENU_BAKE_SETUP
                     && menuState != MENU_SETTINGS
                     && menuState != MENU_CALIBRATION
-                    && menuState != MENU_CALIBRATION_GAINS) {
+                    && menuState != MENU_CALIBRATION_GAINS
+                    && menuState != MENU_CALIBRATION_PLANT) {
                     menuState = MENU_MAIN;
                 }
 
@@ -896,7 +907,8 @@ void core1UITask(void *pvParameters) {
                 }
 
                 if (menuState == MENU_SETTINGS) {
-                    display.renderSettings(settingsMaxBakeMinutes, settingsSelectedRow, useFahrenheit);
+                    float lineFreq = bresenhamPID.getMeasuredFrequency();
+                    display.renderSettings(settingsMaxBakeMinutes, settingsSelectedRow, useFahrenheit, lineFreq);
 
                     if (buttonDebouncer.isPressed(buttonDebouncer.btnUp) ||
                         buttonDebouncer.isPressed(buttonDebouncer.btnRight)) {
@@ -940,7 +952,7 @@ void core1UITask(void *pvParameters) {
                             *off += CAL_OFFSET_STEP;
                             if (*off > CAL_OFFSET_MAX) *off = CAL_OFFSET_MIN;
                         } else {
-                            calibrationSelectedItem = (calibrationSelectedItem - 1 + 4) % 4;
+                            calibrationSelectedItem = (calibrationSelectedItem - 1 + 5) % 5;
                             calibrationEditMode = false;
                         }
                     }
@@ -951,7 +963,7 @@ void core1UITask(void *pvParameters) {
                             *off -= CAL_OFFSET_STEP;
                             if (*off < CAL_OFFSET_MIN) *off = CAL_OFFSET_MAX;
                         } else {
-                            calibrationSelectedItem = (calibrationSelectedItem + 1) % 4;
+                            calibrationSelectedItem = (calibrationSelectedItem + 1) % 5;
                             calibrationEditMode = false;
                         }
                     }
@@ -960,6 +972,9 @@ void core1UITask(void *pvParameters) {
                             calibrationViewZone = 0;
                             menuState = MENU_CALIBRATION_GAINS;
                         } else if (calibrationSelectedItem == 3) {
+                            calibrationViewZone = 0;
+                            menuState = MENU_CALIBRATION_PLANT;
+                        } else if (calibrationSelectedItem == 4) {
                             calTargetRecipeIndex = (selectedRecipeIndex >= 0 && selectedRecipeIndex < storedRecipeCount) ? selectedRecipeIndex : 0;
                             calPhase = 0;
                             calPreheatTime = 0;
@@ -990,6 +1005,27 @@ void core1UITask(void *pvParameters) {
                     PidGains hg = recipePidGains[recipeIdx][calibrationViewZone];
                     PidGains cg = recipeCoolingGains[recipeIdx][calibrationViewZone];
                     display.renderZoneGains(calibrationViewZone, hg, cg);
+
+                    if (buttonDebouncer.isPressed(buttonDebouncer.btnUp) ||
+                        buttonDebouncer.isPressed(buttonDebouncer.btnRight)) {
+                        calibrationViewZone = (calibrationViewZone + 1) % NUM_ZONES;
+                    }
+                    if (buttonDebouncer.isPressed(buttonDebouncer.btnDown) ||
+                        buttonDebouncer.isPressed(buttonDebouncer.btnLeft)) {
+                        calibrationViewZone = (calibrationViewZone - 1 + NUM_ZONES) % NUM_ZONES;
+                    }
+                    if (isSShortPress() ||
+                        buttonDebouncer.isPressed(buttonDebouncer.btnEStop)) {
+                        menuState = MENU_CALIBRATION;
+                    }
+                    break;
+                }
+
+                if (menuState == MENU_CALIBRATION_PLANT) {
+                    float hr = bresenhamPID.getHeatingRate(calibrationViewZone);
+                    float cr = bresenhamPID.getCoolingRate(calibrationViewZone);
+                    float dt = bresenhamPID.getDeadtime(calibrationViewZone);
+                    display.renderPlantModel(calibrationViewZone, hr, cr, dt);
 
                     if (buttonDebouncer.isPressed(buttonDebouncer.btnUp) ||
                         buttonDebouncer.isPressed(buttonDebouncer.btnRight)) {

@@ -1,15 +1,22 @@
 #include "TemperatureReader.h"
 
-TemperatureReader::TemperatureReader() : _tc1Offset(0.0f), _tc2Offset(0.0f) {
+TemperatureReader::TemperatureReader() : _i2cMutex(NULL), _i2cError(false),
+    _tc1Offset(0.0f), _tc2Offset(0.0f) {
     resetFilter();
+    _i2cMutex = xSemaphoreCreateMutex();
 }
 
 void TemperatureReader::begin() {
-    if (!_ads.begin(ADS1015_ADDR)) {
+    lockI2C();
+    bool ok = _ads.begin(ADS1015_ADDR);
+    if (ok) _ads.setGain(GAIN_ONE);
+    unlockI2C();
+
+    if (!ok) {
         Serial.println("FATAL: ADS1015 not found");
+        _i2cError = true;
         while (1) { delay(100); }
     }
-    _ads.setGain(GAIN_ONE);
     Serial.println("ADS1015 initialized");
 }
 
@@ -29,9 +36,15 @@ float TemperatureReader::getCalibrationOffset(int sensor) const {
 
 TemperatureData TemperatureReader::readSensors() {
     TemperatureData data;
+    _i2cError = false;
+    int16_t rawTC1 = 0, rawTC2 = 0;
 
-    int16_t rawTC1 = _ads.readADC_SingleEnded(0);
-    int16_t rawTC2 = _ads.readADC_SingleEnded(1);
+    lockI2C();
+    if (!_i2cError) {
+        rawTC1 = _ads.readADC_SingleEnded(0);
+        rawTC2 = _ads.readADC_SingleEnded(1);
+    }
+    unlockI2C();
 
     float raw1 = rawToCelsius(rawTC1) + _tc1Offset;
     float raw2 = rawToCelsius(rawTC2) + _tc2Offset;

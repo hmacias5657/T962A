@@ -20,7 +20,8 @@ enum MenuState : uint8_t {
     MENU_CALIBRATION_GAINS,
     MENU_CAL_RUN_CONFIRM,
     MENU_CAL_RUNNING,
-    MENU_CAL_COMPLETE
+    MENU_CAL_COMPLETE,
+    MENU_CALIBRATION_PLANT
 };
 
 class DisplayRenderer {
@@ -41,7 +42,8 @@ public:
     void renderProfileCreate(int editStep, int totalSteps, const char *label, int value, int minVal, int maxVal, bool isTemperature);
     void renderBakeSetup(int bakeTemp, int bakeDuration, int maxDuration, bool editingTemp);
     void renderBakeRunning(float tempTC1, float tempTC2, int targetTemp, int elapsedSec, int totalSec);
-    void renderSettings(int maxBakeMinutes, int selectedRow, bool useFahrenheit);
+    void renderSettings(int maxBakeMinutes, int selectedRow, bool useFahrenheit, float lineFreq);
+    void renderPlantModel(int zone, float heatRate, float coolRate, float deadtime);
     void renderCalibration(int selectedItem, bool editMode, float tc1Offset, float tc2Offset);
     void renderZoneGains(int zone, const PidGains &heaterGains, const PidGains &coolingGains);
     void renderCalRunConfirm(const char *recipeName);

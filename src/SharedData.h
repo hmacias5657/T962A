@@ -64,6 +64,7 @@ struct ThermalTelemetry {
     ProfileStage currentStage;
     SystemState systemState;
     uint8_t errorCode;
+    bool i2cError;
 };
 
 #endif

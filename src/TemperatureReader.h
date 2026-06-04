@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <Adafruit_ADS1X15.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "Config.h"
 
 struct TemperatureData {
@@ -23,9 +25,14 @@ public:
     void setCalibrationOffset(int sensor, float offset);
     float getCalibrationOffset(int sensor) const;
     void resetFilter() { _firstRead = true; }
+    void lockI2C() { if (_i2cMutex && xSemaphoreTake(_i2cMutex, pdMS_TO_TICKS(50)) != pdTRUE) _i2cError = true; }
+    void unlockI2C() { if (_i2cMutex) xSemaphoreGive(_i2cMutex); }
+    bool hasI2cError() const { return _i2cError; }
 
 private:
     Adafruit_ADS1015 _ads;
+    SemaphoreHandle_t _i2cMutex;
+    bool _i2cError;
     float _tc1Offset;
     float _tc2Offset;
     float _filteredTemp1 = 0.0f;

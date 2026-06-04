@@ -161,6 +161,11 @@ void DisplayRenderer::renderLivePlot(const ThermalTelemetry &data, const ReflowR
         _display.print(data.currentSeconds);
         _display.print("s");
 
+        if (data.i2cError) {
+            _display.setFont(u8g2_font_5x7_tf);
+            _display.drawStr(95, 8, "I2C!");
+        }
+
         if (data.currentSeconds < PLOT_DURATION_S) {
             drawAxes();
             if (recipe.type == RECIPE_REFLOW) {
@@ -199,7 +204,8 @@ void DisplayRenderer::renderErrorScreen(uint8_t errorCode) {
         switch (errorCode) {
             case 1: msg = "TC Open Circuit"; break;
             case 2: msg = "Thermal Runaway"; break;
-            case 3: msg = "TC Fault"; break;
+            case 3: msg = "TC Delta > 45C"; break;
+            case 4: msg = "I2C Bus Error"; break;
             default: msg = "Unknown Error"; break;
         }
         _display.drawStr(5, 50, msg);
@@ -323,7 +329,7 @@ void DisplayRenderer::renderBakeRunning(float tempTC1, float tempTC2, int target
     } while (_display.nextPage());
 }
 
-void DisplayRenderer::renderSettings(int maxBakeMinutes, int selectedRow, bool useFahrenheit) {
+void DisplayRenderer::renderSettings(int maxBakeMinutes, int selectedRow, bool useFahrenheit, float lineFreq) {
     _display.firstPage();
     do {
         _display.setFont(u8g2_font_6x10_tf);
@@ -342,7 +348,12 @@ void DisplayRenderer::renderSettings(int maxBakeMinutes, int selectedRow, bool u
         _display.print("Units: ");
         if (useFahrenheit) _display.print("F"); else _display.print("C");
 
-        _display.setCursor(5, 60);
+        _display.setCursor(5, 54);
+        _display.print("Line: ");
+        _display.print(lineFreq, 1);
+        _display.print(" Hz");
+
+        _display.setCursor(5, 63);
         _display.print("[S]=row [Hold]=save");
     } while (_display.nextPage());
 }
@@ -387,36 +398,40 @@ void DisplayRenderer::renderCalibration(int selectedItem, bool editMode, float t
         _display.setFont(u8g2_font_5x7_tf);
         char buf[20];
 
-        if (selectedItem == 0) _display.drawStr(3, 22, ">");
-        _display.setCursor(13, 22);
+        if (selectedItem == 0) _display.drawStr(3, 20, ">");
+        _display.setCursor(13, 20);
         _display.print("TC1 Off:");
         snprintf(buf, sizeof(buf), "%+.1f", (double)tc1Offset);
         _display.print(buf);
         _display.print("C");
         if (selectedItem == 0 && editMode) {
-            _display.drawStr(95, 22, "EDIT");
+            _display.drawStr(95, 20, "EDIT");
         }
 
-        if (selectedItem == 1) _display.drawStr(3, 31, ">");
-        _display.setCursor(13, 31);
+        if (selectedItem == 1) _display.drawStr(3, 28, ">");
+        _display.setCursor(13, 28);
         _display.print("TC2 Off:");
         snprintf(buf, sizeof(buf), "%+.1f", (double)tc2Offset);
         _display.print(buf);
         _display.print("C");
         if (selectedItem == 1 && editMode) {
-            _display.drawStr(95, 31, "EDIT");
+            _display.drawStr(95, 28, "EDIT");
         }
 
-        if (selectedItem == 2) _display.drawStr(3, 40, ">");
-        _display.setCursor(13, 40);
+        if (selectedItem == 2) _display.drawStr(3, 36, ">");
+        _display.setCursor(13, 36);
         _display.print("View Gains");
 
-        if (selectedItem == 3) _display.drawStr(3, 49, ">");
-        _display.setCursor(13, 49);
+        if (selectedItem == 3) _display.drawStr(3, 44, ">");
+        _display.setCursor(13, 44);
+        _display.print("Plant Model");
+
+        if (selectedItem == 4) _display.drawStr(3, 52, ">");
+        _display.setCursor(13, 52);
         _display.print("Cal Run");
 
         _display.setCursor(5, 61);
-        _display.print("[S]=edit [Hold]=save");
+        _display.print("[S]=select [Hold]=save");
     } while (_display.nextPage());
 }
 
@@ -459,6 +474,45 @@ void DisplayRenderer::renderZoneGains(int zone, const PidGains &heaterGains, con
         _display.setCursor(110, 12);
         _display.print("/");
         _display.print(NUM_ZONES);
+    } while (_display.nextPage());
+}
+
+void DisplayRenderer::renderPlantModel(int zone, float heatRate, float coolRate, float deadtime) {
+    static const char* zoneLabels[] = {"PRE", "SOAK", "RAMP", "PEAK", "COOL"};
+    const char* zl = (zone >= 0 && zone < NUM_ZONES) ? zoneLabels[zone] : "?";
+
+    _display.firstPage();
+    do {
+        _display.setFont(u8g2_font_6x10_tf);
+        _display.setCursor(5, 12);
+        _display.print("Plant Model");
+        _display.drawHLine(0, 16, SCREEN_WIDTH);
+
+        _display.setFont(u8g2_font_5x7_tf);
+        _display.setCursor(5, 26);
+        _display.print("Zone:");
+        _display.print(zone);
+        _display.print(" ");
+        _display.print(zl);
+        _display.setCursor(90, 26);
+        _display.print(zone + 1);
+        _display.print("/");
+        _display.print(NUM_ZONES);
+
+        _display.setCursor(5, 38);
+        _display.print("Heat:");
+        _display.print(heatRate, 2);
+        _display.print(" C/s");
+
+        _display.setCursor(5, 48);
+        _display.print("Cool:");
+        _display.print(coolRate, 2);
+        _display.print(" C/s");
+
+        _display.setCursor(5, 58);
+        _display.print("Dead:");
+        _display.print(deadtime, 1);
+        _display.print(" s");
     } while (_display.nextPage());
 }
 

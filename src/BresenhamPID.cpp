@@ -39,12 +39,12 @@ void IRAM_ATTR BresenhamPID::handleZeroCrossing() {
     // Calibration sampling
     if (_calibrating) {
         if (_calCount == 0) {
-            _calStartTime = esp_timer_get_time();
+            _calStartTime = micros();
             _calCount = 1;
         } else {
             _calCount++;
             if (_calCount >= CAL_CYCLES) {
-                _calEndTime = esp_timer_get_time();
+                _calEndTime = micros();
                 _calibrating = false;
                 _calDone = true;
             }
