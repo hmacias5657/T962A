@@ -6,11 +6,11 @@ AI-enhanced adaptive PID reflow oven temperature controller for the T962A oven, 
 
 - **Dual-core FreeRTOS**: Core 0 handles thermodynamics (PID, Bresenham, ADC), Core 1 handles UI (display, buttons, buzzer)
 - **Bresenham power distribution**: 256 half-cycle AC power modulation via zero-cross SSR for heater and cooling fan
-- **Multi-zone PID**: 5 independent PID gain sets per recipe (Preheat/Soak/ReflowRamp/ReflowPeak/Cooldown) for both heater and cooling fan, saved per-zone in NVS and loaded on zone transitions
-- **Feedforward control**: Target-ramp-rate feedforward uses measured plant heating/cooling rates to pre-emptively apply heater/cooling power — PID only corrects residual error
+- **Multi-zone PID with per-zone persistence**: 5 independent PID gain sets per recipe (Preheat/Soak/ReflowRamp/ReflowPeak/Cooldown) for both heater and cooling fan. Gains are saved to NVS at each zone transition and reloaded when the same recipe runs again — the controller learns optimal per-zone tuning over successive runs
+- **AI gain scheduler** (`AITuner`): Applies runtime adjustments on top of zone gains — **spatial damping** reduces heater gain when the two thermocouples diverge (>20°C) to prevent thermal runaway; **spatial boost** increases cooling gain proportionally to inter-sensor delta (>15°C); **learning heuristic** boosts integral gain during error recovery when close to setpoint
+- **Feedforward control**: Separate from the AI scheduler, the feedforward path pre-computes heater/cooling power from the profile's target ramp rate and the oven's measured per-zone heating/cooling rates. The PID loop only corrects residual error, enabling faster ramp tracking with less overshoot
 - **Plant model calibration**: Dedicated calibration cycle measures per-zone heating rates (°C/s at 100% output), natural cooling rates, and thermal deadtime; stored globally in NVS and used by feedforward on all subsequent runs
 - **EMA temperature filtering**: 1-pole exponential moving average (α=0.15) removes ~85% of ADC noise from each thermocouple reading before it reaches the PID derivative term; fault detection reads raw value
-- **AI supervisory gain tuner**: Spatial thermal gradient damping with learning heuristic for both heating and cooling; stage tuning natively embedded in per-zone gains
 - **Dual K-type thermocouples**: Synced 12-bit ADS1015 ADC reading via I2C at zero-cross for noise immunity and linearity; per-sensor calibration offset adjustment
 - **128x64 KS0108 GLCD**: Original T962A parallel display driven via U8g2; real-time target vs. actual temperature plot with firmware version and line frequency on splash screen
 - **NVS-persistent recipes and PID gains**: Up to 10 user-created profiles stored in ESP32 NVS; per-zone heater and cooling PID coefficients saved after each cycle
