@@ -100,7 +100,6 @@ pio device monitor
 ## Project Structure
 
 ```
-├── Adaptive_Considerations.md # Design reference for adaptive PID, feedforward, ESP-IDF porting
 ├── platformio.ini             # PlatformIO build config (ESP32, U8g2, ADS1X15)
 ├── rename_firmware.py         # Post-build script: firmware.bin → firmware_v<VERSION>.bin
 src/

@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This controller automates the reflow soldering process in a T962A oven using an ESP32 with dual thermocouples, multi-zone adaptive PID control, a system cooling fan, a Bresenham-controlled oven cooling fan, and a 128x64 KS0108 GLCD display. It supports reflow profiles and baking/drying profiles with real-time temperature tracking, audible alerts, thermocouple calibration, and emergency stop. Heater and cooling PID coefficients are learned per stage and saved to NVS. The original T962A 5-key membrane (F1–F4, S) is reused with a dedicated hardware E-STOP added.
+This controller automates the reflow soldering process in a T962A oven using an ESP32 with dual thermocouples, multi-zone adaptive PID control, a system cooling fan, a Bresenham-controlled oven cooling fan, and a 128x64 KS0108 GLCD display. It supports reflow profiles and baking/drying profiles with real-time temperature tracking, audible alerts, thermocouple calibration, and emergency stop. Three control layers work together: **per-zone PID gains** (5 zones per recipe, persisted to NVS), an **AI gain scheduler** (spatial damping + learning heuristic), and **feedforward control** (pre-computes power from target ramp rate and measured plant model). The original T962A 5-key membrane (F1–F4, S) is reused with a dedicated hardware E-STOP added.
 
 Key control enhancements in v2.0.0:
 - **EMA filtering**: An exponential moving average filter (α=0.15) removes ~85% of high-frequency noise from thermocouple readings before they reach the PID derivative term, reducing output jitter without adding latency. Fault detection still uses the raw sensor value for safety.
@@ -133,7 +133,7 @@ The cycle proceeds through these stages automatically:
 | Reflow Peak | Hold at peak temperature for solder reflow |
 | Cooldown | Controlled cooling via oven cooling fan to safe handling temperature |
 
-A short beep sounds at each stage transition. On each transition, the current PID coefficients (Kp, Ki, Kd) for both heater and cooling fan are saved to the exiting zone in NVS, and the stored gains for the entering zone are loaded — the AI tuner then adapts from those starting values.
+A short beep sounds at each stage transition. At each transition, the current PID coefficients (Kp, Ki, Kd) for both heater and cooling fan are saved to the exiting zone in NVS, and the stored gains for the entering zone are loaded. The AI gain scheduler then applies spatial damping (reduces gain if sensors diverge) and a learning heuristic on top of those values during the run.
 
 **Feedforward control**: The controller simultaneously computes a feedforward power term based on the profile's target ramp rate and the oven's measured heating rate. For example, if the profile requires a 1°C/s rise during Reflow Ramp and the oven heats at 2°C/s at 100% output, the feedforward term pre-emptively applies ~50% heater power. The PID loop then corrects only the remaining error, enabling tighter tracking with less overshoot. During the Soak and Peak stages (where dTarget/dt ≈ 0), feedforward is minimal and PID handles regulation.
 
@@ -329,11 +329,15 @@ Each measured time is multiplied by a 1.2x safety margin (minimums: Ramp 30s, So
 
 The oven must be empty (no PCB) during a calibration run. E-STOP is available at any time.
 
-## 7. Multi-Zone PID Learning
+## 7. Control Architecture: Three Layers
+
+The controller combines three independent layers to achieve precise thermal tracking:
+
+### Layer 1: Multi-Zone PID with Per-Zone Persistence
 
 Each recipe has 5 independent PID gain sets for both heater and cooling, one per reflow stage:
 
-### Heater Gains
+**Heater Gains**
 
 | Zone | Default Kp | Default Ki | Default Kd | Characteristic |
 |------|-----------|-----------|-----------|----------------|
@@ -343,7 +347,7 @@ Each recipe has 5 independent PID gain sets for both heater and cooling, one per
 | Reflow Peak | 1.20 | 0.015 | 2.16 | Low P, very low I, aggressive D — tight peak hold |
 | Cooldown | 0.20 | 0.000 | 0.12 | Minimal control — natural cooling, just avoids thermal shock |
 
-### Cooling Fan Gains
+**Cooling Fan Gains**
 
 | Zone | Default Kp | Default Ki | Default Kd | Characteristic |
 |------|-----------|-----------|-----------|----------------|
@@ -353,13 +357,36 @@ Each recipe has 5 independent PID gain sets for both heater and cooling, one per
 | Reflow Peak | 1.50 | 0.020 | 0.80 | Moderate-high — tight overshoot protection at peak |
 | Cooldown | 2.00 | 0.030 | 1.00 | Primary cooling control during cooldown phase |
 
-When the control loop detects a stage transition:
-1. Current BresenhamPID heater and cooling gains are saved to the exiting zone's NVS slot.
-2. Stored heater and cooling gains for the new zone are loaded into the PID controller.
-3. The AI tuner applies spatial damping and a learning heuristic for both heater and cooling during the run.
-4. At cycle end, the current gains are saved to the final zone.
+At each stage transition, the current heater and cooling gains are saved to the exiting zone's NVS slot and the stored gains for the new zone are loaded. Over multiple cycles, each zone independently converges to its optimal gain values.
 
-Over multiple cycles, each zone accumulates its own optimal gain values independent of the other zones.
+### Layer 2: AI Gain Scheduler (AITuner)
+
+On top of the per-zone stored gains, the AITuner applies two runtime adjustments:
+
+- **Spatial damping**: If the two thermocouples diverge by more than 20°C (indicating uneven heating), heater Kp is reduced proportionally to prevent thermal runaway while Kd is boosted for tighter derivative response.
+- **Spatial boost for cooling**: When the inter-sensor delta exceeds 15°C, cooling Kp is boosted up to 2× to suppress developing hot spots.
+- **Learning heuristic**: During error recovery near setpoint (|error| < 20°C), Ki is boosted by 10% to help eliminate steady-state error. On the cooling side, if the oven is more than 5°C above target and that error is increasing, cooling Kp is nudged upward.
+
+These adjustments are deterministic rules — not a neural network — but they emulate adaptive behavior by reacting to the real-time thermal state of the oven.
+
+### Layer 3: Feedforward Control
+
+Separate from the AI scheduler, the feedforward path pre-computes heater or cooling power from the profile's target ramp rate and the oven's measured plant characteristics:
+
+- **Heater feedforward**: `computeFeedforward()` calculates `(dTargetDt / heatingRate[zone]) × 256`. If the profile needs +1°C/s and the oven heats at 2°C/s at 100% output, feedforward applies ~50% power automatically. The PID loop only corrects the residual error. Capped at 80% of full output for safety.
+- **Cooling feedforward**: `computeCoolingFeedforward()` activates only when the target drops faster than the oven's natural cooling rate. It applies proportional fan power to assist the natural cooldown.
+- **Plant model**: Per-zone heating rates, cooling rates, and thermal deadtime are measured during the calibration run and stored globally in NVS. These values are used by all subsequent reflow and baking cycles — no re-measurement is required during normal operation.
+
+### Summary
+
+When a reflow cycle runs:
+
+1. The **profile engine** calculates the target temperature and target ramp rate for the current elapsed time.
+2. On zone transitions, per-zone **heater and cooling PID gains** are loaded from NVS.
+3. The **feedforward path** pre-computes heater/cooling power from the target ramp rate and the plant model.
+4. The **AITuner** adjusts gains for spatial uniformity and learning.
+5. The **PID loop** computes the remaining correction and adds it to the feedforward term.
+6. The combined output is distributed across 256 zero-cross half-cycles via **Bresenham modulation**.
 
 ## 8. Cooling Fans
 
@@ -378,7 +405,8 @@ The oven cooling fan assists the PID algorithm in controlling temperature:
 - During the **Cooldown** stage: the fan modulates proportionally to track the decreasing target temperature curve
 - During **overshoot** events (temperature exceeds target by >10°C in any stage): the fan activates to suppress the overshoot while the heater turns off
 - Cooling power is distributed over 256 half-cycles, same as the heater, for smooth linear control
-- The AITuner adapts cooling gains spatially — more cooling power when the gradient between sensors is high
+- The AI gain scheduler applies a **spatial boost** — cooling gains are increased proportionally when the two thermocouples diverge (>15°C) to suppress hot spots
+- A **cooling feedforward** path activates proportional fan power when the target temperature drops faster than the oven's natural cooling rate
 
 ## 9. Emergency Stop
 

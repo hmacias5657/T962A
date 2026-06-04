@@ -3,7 +3,7 @@
 ## Project: Adaptive PID Reflow Oven Controller
 
 ### Date
-May 31, 2026
+June 4, 2026
 
 ### Prompt Origin
 The user provided a detailed markdown specification (`Adaptive PID reflow oven controller.md`) outlining an AI-enhanced adaptive PID reflow oven controller for the T962A oven. The specification evolved through iterative prompting covering hardware selection, control algorithms, dual-core architecture, UI design, and safety systems.
@@ -37,6 +37,9 @@ The user provided a detailed markdown specification (`Adaptive PID reflow oven c
 | Preferences library | Built-in ESP32 NVS wrapper; used for recipe and config persistence |
 | Stage tuning disabled by default | Per-zone gains already embed zone-specific tuning; AITuner only applies spatial damping and learning heuristic |
 | Dual Bresenham channels | Heater + cooling fan share same ZC ISR with independent accumulators — proportional cooling without extra interrupts |
+| Feedforward separate from AI | `computeFeedforward()` uses plant model (heating/cooling rates) for pre-emptive power; AI scheduler only handles spatial damping and learning on residual PID error |
+| Plant model globally in NVS | Heating rate, cooling rate, deadtime stored as global NVS keys (`phr0-4`, `pcr0-4`, `pdt`) — not per-recipe — measured once by calibration, used by all subsequent runs |
+| EMA filter in TemperatureReader | 1-pole α=0.15 on each TC reading before PID derivative; reset on cycle start; fault detection on raw value |
 | System fan PWM on GPIO 4 | DC fan via MOSFET with temp-proportional speed keeps controller electronics cool |
 | Calibration offsets per sensor | TC1/TC2 offsets stored in NVS and applied in readSensors() — compensates for amplifier/ADC tolerances without hardware changes |
 
@@ -46,12 +49,13 @@ The user provided a detailed markdown specification (`Adaptive PID reflow oven c
 Core 0 (Priority 3, 4KB stack)
   └─ Control Loop (~2.13s period)
        ├─ Wait for ADC trigger from ZC ISR
-       ├─ Read 2x thermocouples via 12-bit ADC
-       ├─ Compute target temp from ProfileEngine
+       ├─ Read 2x thermocouples via 12-bit ADC (with EMA filter)
+       ├─ Compute target temp + ramp rate from ProfileEngine
        ├─ On zone transition: save current gains, load stored zone gains
+       ├─ Compute feedforward power from plant model (heating/cooling rates)
        ├─ Run AITuner gain scheduling (spatial damping + learning)
-       ├─ Execute PID → BresenhamOutput (0-256)
-       ├─ Cooling fan control during cooldown/overshoot
+       ├─ Execute PID → add feedforward → BresenhamOutput (0-256)
+       ├─ Cooling fan control with cooling feedforward
        ├─ System fan PWM (temp-proportional)
        ├─ Safety checks (over-temp, sensor fault, spatial delta)
        └─ Push ThermalTelemetry to Queue
@@ -81,21 +85,21 @@ ISR (IRAM)
 |------|-------|---------|
 | `platformio.ini` | 20 | PlatformIO build config (ESP32, U8g2, Adafruit ADS1X15 deps) |
 | `rename_firmware.py` | 13 | Post-build script: copies firmware.bin → firmware_v{VERSION}.bin |
-| `src/Config.h` | 123 | All pin mappings, constants, limits, baking/zone/cooling/cal defaults, FIRMWARE_VERSION; T962A keypad pinout |
-| `src/SharedData.h` | 68 | ReflowRecipe, PidGains, ThermalTelemetry (incl. coolingOutput), state and stage enums |
-| `src/main.cpp` | 1292 | FreeRTOS entry, dual-core task orchestration, NVS, zone transitions, baking/calibration state machines, system fan, cooling control |
-| `src/BresenhamPID.cpp` | 183 | ZC ISR, dual-channel Bresenham (heater + cooling), PID loop, line frequency calibration |
-| `src/BresenhamPID.h` | 75 | BresenhamPID class interface with cooling channel and calibration |
-| `src/TemperatureReader.cpp` | 42 | ADS1015 I2C reading, °C conversion, fault flags, calibration offsets |
-| `src/TemperatureReader.h` | 33 | TemperatureReader class interface, TemperatureData struct |
-| `src/ProfileEngine.cpp` | 77 | 5-stage linear interpolation + bake mode (constant temp) |
-| `src/ProfileEngine.h` | 22 | ProfileEngine class interface |
+| `src/Config.h` | 125 | All pin mappings, constants, limits, baking/zone/cooling/cal defaults, FIRMWARE_VERSION; T962A keypad pinout |
+| `src/SharedData.h` | 69 | ReflowRecipe, PidGains, ThermalTelemetry (incl. coolingOutput), state and stage enums |
+| `src/main.cpp` | 1378 | FreeRTOS entry, dual-core task orchestration, NVS, zone transitions, baking/calibration state machines, system fan, cooling control |
+| `src/BresenhamPID.cpp` | 334 | ZC ISR, dual-channel Bresenham (heater + cooling), PID loop, feedforward, line frequency calibration, plant model measurement |
+| `src/BresenhamPID.h` | 106 | BresenhamPID class interface with cooling channel, feedforward, plant model, and calibration |
+| `src/TemperatureReader.cpp` | 56 | ADS1015 I2C reading, °C conversion, EMA filter, fault flags, calibration offsets |
+| `src/TemperatureReader.h` | 38 | TemperatureReader class interface, TemperatureData struct, EMA filter state |
+| `src/ProfileEngine.cpp` | 101 | 5-stage linear interpolation + target ramp rate + bake mode |
+| `src/ProfileEngine.h` | 23 | ProfileEngine class interface |
 | `src/AITuner.cpp` | 103 | Gain scheduler: heater + cooling spatial damping, learning heuristic |
 | `src/AITuner.h` | 40 | AITuner class interface (heater + cooling gain scheduling) |
 | `src/DisplayRenderer.cpp` | 551 | U8g2 screens: main menu, recipe select, live plot, error, e-stop, profile create, bake setup, bake running, settings, calibration, zone gains |
 | `src/DisplayRenderer.h` | 64 | DisplayRenderer class interface, MenuState enum (11 states) |
 | `src/ButtonDebouncer.cpp` | 58 | 50ms non-blocking debounce for 5 buttons |
-| `src/ButtonDebouncer.h` | 33 | ButtonDebouncer class interface, ButtonState struct |
+| `src/ButtonDebouncer.h` | 45 | ButtonDebouncer class interface, ButtonState struct, T962A key aliases |
 | `src/Buzzer.cpp` | 81 | 5 buzzer patterns with timing |
 | `src/Buzzer.h` | 33 | Buzzer class interface, BuzzerPattern enum |
 
@@ -214,6 +218,5 @@ Flash: 5.4%  (355121 / 6553600 bytes)
 - **SharedData.h**: Added `cooldownTime` field to `ReflowRecipe` struct; `saveRecipeToNvs()`/`loadRecipeFromNvs()` persist `r{N}_cool` key
 - `BresenhamPID`: `measureRampRate()`/`measureDeadtime()` moved to public; added `resetDeadtimeDetection()`; removed continuous measurement calls from `runPIDLoop`
 - `main.cpp`: removed `savePlantModelForRecipeZone()`/`loadPlantModelForRecipeZone()`; added `saveGlobalPlantModel()`/`loadGlobalPlantModel()` with `phr0-4`, `pcr0-4`, `pdt` NVS keys
-- `Adaptive_Considerations.md`: new comprehensive design reference documenting all adaptive PID considerations, feedforward design, calibration test specification, and ESP-IDF porting notes
 - `ProfileEngine.cpp`: `getTotalDuration()` uses `recipe.cooldownTime` instead of hardcoded 60s
 - `DisplayRenderer`: `renderCalComplete()` shows "Cool:" (peak→120°C time) instead of "Hold:"
