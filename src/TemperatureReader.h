@@ -22,11 +22,16 @@ public:
     TemperatureData readSensors();
     void setCalibrationOffset(int sensor, float offset);
     float getCalibrationOffset(int sensor) const;
+    void resetFilter() { _firstRead = true; }
 
 private:
     Adafruit_ADS1015 _ads;
     float _tc1Offset;
     float _tc2Offset;
+    float _filteredTemp1 = 0.0f;
+    float _filteredTemp2 = 0.0f;
+    bool _firstRead = true;
+    static constexpr float _alpha = 0.15f;
     float rawToCelsius(int16_t raw);
 };
 

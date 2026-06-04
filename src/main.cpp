@@ -63,6 +63,7 @@ int calPreheatTime = 0;
 int calSoakTime = 0;
 int calReflowTime = 0;
 int calPeakReachedSec = 0;
+int calCooldownTime = 0;
 int calTargetRecipeIndex = 0;
 int calPhase = 0;
 
@@ -111,9 +112,9 @@ int profileCreateMax[7] = { 200, 220, 280, 300, 300, 180, 120 };
 
 // ===================== Default Recipes =====================
 static const ReflowRecipe defaultRecipes[RECIPE_COUNT_DEFAULT] = {
-    {RECIPE_REFLOW, "Sn63/Pb37",     100, 150, 220, 90,  90,  30,  30, 0, 0},
-    {RECIPE_REFLOW, "SAC305",        150, 200, 245, 90,  90,  30,  30, 0, 0},
-    {RECIPE_REFLOW, "Bi58/Sn42",     100, 140, 170, 90,  90,  30,  30, 0, 0}
+    {RECIPE_REFLOW, "Sn63/Pb37",     100, 150, 220, 90,  90,  30,  30,  0, 0, 0},
+    {RECIPE_REFLOW, "SAC305",        150, 200, 245, 90,  90,  30,  30,  0, 0, 0},
+    {RECIPE_REFLOW, "Bi58/Sn42",     100, 140, 170, 90,  90,  30,  30,  0, 0, 0}
 };
 
 // ===================== Default Per-Zone Gains =====================
@@ -154,6 +155,8 @@ void saveRecipeToNvs(int index) {
     prefs.putInt(key, recipes[index].reflowTime);
     snprintf(key, sizeof(key), "r%d_hold", index);
     prefs.putInt(key, recipes[index].peakHoldTime);
+    snprintf(key, sizeof(key), "r%d_cool", index);
+    prefs.putInt(key, recipes[index].cooldownTime);
 
     for (int z = 0; z < NUM_ZONES; z++) {
         snprintf(key, sizeof(key), "r%d_z%d_kp", index, z);
@@ -197,6 +200,8 @@ void loadRecipeFromNvs(int index) {
     recipes[index].reflowTime = prefs.getInt(key, 40);
     snprintf(key, sizeof(key), "r%d_hold", index);
     recipes[index].peakHoldTime = prefs.getInt(key, 20);
+    snprintf(key, sizeof(key), "r%d_cool", index);
+    recipes[index].cooldownTime = prefs.getInt(key, 60);
     recipes[index].type = RECIPE_REFLOW;
     recipes[index].bakeTemp = 0;
     recipes[index].bakeDuration = 0;
@@ -258,6 +263,33 @@ void saveCoolingGainsForRecipeZone(int recipeIdx, int zoneIdx, float kp, float k
     prefs.end();
 }
 
+void saveGlobalPlantModel() {
+    prefs.begin(NVS_NAMESPACE, false);
+    for (int z = 0; z < NUM_ZONES; z++) {
+        char key[12];
+        snprintf(key, sizeof(key), "phr%d", z);
+        prefs.putFloat(key, bresenhamPID.getHeatingRate(z));
+        snprintf(key, sizeof(key), "pcr%d", z);
+        prefs.putFloat(key, bresenhamPID.getCoolingRate(z));
+    }
+    prefs.putFloat("pdt", bresenhamPID.getDeadtime(0));
+    prefs.end();
+}
+
+void loadGlobalPlantModel() {
+    prefs.begin(NVS_NAMESPACE, true);
+    float deadtime = prefs.getFloat("pdt", 2.0f);
+    for (int z = 0; z < NUM_ZONES; z++) {
+        char key[12];
+        snprintf(key, sizeof(key), "phr%d", z);
+        bresenhamPID.setHeatingRate(z, prefs.getFloat(key, 0.0f));
+        snprintf(key, sizeof(key), "pcr%d", z);
+        bresenhamPID.setCoolingRate(z, prefs.getFloat(key, 0.0f));
+        bresenhamPID.setDeadtime(z, deadtime);
+    }
+    prefs.end();
+}
+
 void saveCalibrationToNvs() {
     prefs.begin(NVS_NAMESPACE, false);
     prefs.putFloat("tc1Off", tc1Offset);
@@ -314,6 +346,7 @@ void initNvs() {
         }
     }
 
+    loadGlobalPlantModel();
     tempReader.setCalibrationOffset(0, tc1Offset);
     tempReader.setCalibrationOffset(1, tc2Offset);
 
@@ -369,6 +402,7 @@ void updateSystemFan(float avgTemp) {
 void core0ControlLoop(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     ProfileStage prevStage = STAGE_COMPLETE;
+    float lastAvgTemp = AMBIENT_TEMP;
 
     for (;;) {
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS((TickType_t)bresenhamPID.getWindowMs()));
@@ -379,6 +413,10 @@ void core0ControlLoop(void *pvParameters) {
         bresenhamPID.clearAdcTrigger();
 
         TemperatureData tempData = tempReader.readSensors();
+
+        float ts = bresenhamPID.getTimeStepS();
+        float dTempDt = (tempData.avgTemp - lastAvgTemp) / ts;
+        lastAvgTemp = tempData.avgTemp;
 
         updateSystemFan(tempData.avgTemp);
 
@@ -395,6 +433,7 @@ void core0ControlLoop(void *pvParameters) {
 
                 int targetTemp = profileEngine.calculateTargetTemp(profileTimerSeconds, activeRecipe);
                 ProfileStage stage = profileEngine.getCurrentStage(profileTimerSeconds, activeRecipe);
+                float dTargetDt = profileEngine.getTargetRampRate(profileTimerSeconds, activeRecipe);
 
                 if (stage != prevStage && prevStage < NUM_ZONES) {
                     float curKp = bresenhamPID.getKp();
@@ -431,7 +470,8 @@ void core0ControlLoop(void *pvParameters) {
                     aiTuner.runCoolingInference(tempData.avgTemp, tempData.spatialDelta,
                                                  targetTemp, stage, &ckp, &cki, &ckd);
                     bresenhamPID.setCoolingGains(ckp, cki, ckd);
-                    bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp);
+                    bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp,
+                                               dTargetDt, dTempDt, stage);
                 } else {
                     float hotError = tempData.avgTemp - (float)targetTemp;
                     if (hotError > 10.0f) {
@@ -440,7 +480,8 @@ void core0ControlLoop(void *pvParameters) {
                         aiTuner.runCoolingInference(tempData.avgTemp, tempData.spatialDelta,
                                                      targetTemp, stage, &ckp, &cki, &ckd);
                         bresenhamPID.setCoolingGains(ckp, cki, ckd);
-                        bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp);
+                        bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp,
+                                                   dTargetDt, dTempDt, stage);
                     } else {
                         bresenhamPID.setCoolingOutput(0);
 
@@ -451,7 +492,8 @@ void core0ControlLoop(void *pvParameters) {
                                              targetTemp, stage, &kp, &ki, &kd);
                         bresenhamPID.setAIGains(kp, ki, kd);
                         bresenhamPID.runPIDLoop(targetTemp, tempData.avgTemp,
-                                                tempData.temp1, tempData.temp2);
+                                                tempData.temp1, tempData.temp2,
+                                                dTargetDt, dTempDt, stage);
                     }
                 }
 
@@ -475,6 +517,7 @@ void core0ControlLoop(void *pvParameters) {
 
                 ProfileStage stage = profileEngine.getCurrentStage(profileTimerSeconds, activeRecipe);
                 int targetTemp = profileEngine.calculateTargetTemp(profileTimerSeconds, activeRecipe);
+                float dTargetDt = profileEngine.getTargetRampRate(profileTimerSeconds, activeRecipe);
 
                 if (stage != prevStage && prevStage < NUM_ZONES) {
                     float curKp = bresenhamPID.getKp();
@@ -498,7 +541,8 @@ void core0ControlLoop(void *pvParameters) {
                 aiTuner.runCoolingInference(tempData.avgTemp, tempData.spatialDelta,
                                              targetTemp, stage, &ckp, &cki, &ckd);
                 bresenhamPID.setCoolingGains(ckp, cki, ckd);
-                bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp);
+                bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp,
+                                           dTargetDt, dTempDt, stage);
 
                 if (tempData.avgTemp < 50.0f) {
                     currentSystemState = STATE_IDLE;
@@ -538,6 +582,7 @@ void core0ControlLoop(void *pvParameters) {
                 }
 
                 int targetTemp = profileEngine.calculateTargetTemp(profileTimerSeconds, activeRecipe);
+                float dTargetDt = 0.0f;
 
                 float hotError = tempData.avgTemp - (float)targetTemp;
                 if (hotError > 10.0f) {
@@ -546,7 +591,8 @@ void core0ControlLoop(void *pvParameters) {
                     aiTuner.runCoolingInference(tempData.avgTemp, tempData.spatialDelta,
                                                  targetTemp, STAGE_SOAK, &ckp, &cki, &ckd);
                     bresenhamPID.setCoolingGains(ckp, cki, ckd);
-                    bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp);
+                    bresenhamPID.runCoolingPID(targetTemp, tempData.avgTemp,
+                                               dTargetDt, dTempDt, STAGE_SOAK);
                 } else {
                     bresenhamPID.setCoolingOutput(0);
                     float kp = bresenhamPID.getKp();
@@ -556,7 +602,8 @@ void core0ControlLoop(void *pvParameters) {
                                          targetTemp, STAGE_SOAK, &kp, &ki, &kd);
                     bresenhamPID.setAIGains(kp, ki, kd);
                     bresenhamPID.runPIDLoop(targetTemp, tempData.avgTemp,
-                                            tempData.temp1, tempData.temp2);
+                                            tempData.temp1, tempData.temp2,
+                                            dTargetDt, dTempDt, STAGE_SOAK);
                 }
 
                 ThermalTelemetry telemetry;
@@ -575,11 +622,24 @@ void core0ControlLoop(void *pvParameters) {
                 xQueueOverwrite(telemetryQueue, &telemetry);
 
             } else if (state == STATE_CAL_RUNNING) {
+                static bool calDeadtimeResetDone = false;
+                if (!calDeadtimeResetDone) {
+                    bresenhamPID.resetDeadtimeDetection();
+                    calDeadtimeResetDone = true;
+                }
+
                 profileTimerSeconds += 2;
                 int preheatT = activeRecipe.preheatTemp;
                 int soakT = activeRecipe.soakTemp;
                 int peakT = activeRecipe.peakTemp;
                 float avg = tempData.avgTemp;
+
+                // Map calibration phase to profile stage for plant model measurement
+                static const ProfileStage calStageMap[] = {
+                    STAGE_PREHEAT, STAGE_SOAK, STAGE_REFLOW_RAMP,
+                    STAGE_REFLOW_PEAK, STAGE_COOLDOWN
+                };
+                ProfileStage calStage = calStageMap[min(calPhase, 4)];
 
                 if (calPhase == 0 && avg >= preheatT) {
                     calPreheatTime = profileTimerSeconds;
@@ -600,30 +660,49 @@ void core0ControlLoop(void *pvParameters) {
                     float kp = 3.0f, ki = 0.1f, kd = 1.5f;
                     bresenhamPID.setAIGains(kp, ki, kd);
                     int target = (calPhase == 0) ? preheatT : (calPhase == 1) ? soakT : peakT;
-                    bresenhamPID.runPIDLoop(target, avg, tempData.temp1, tempData.temp2);
+                    bresenhamPID.runPIDLoop(target, avg, tempData.temp1, tempData.temp2,
+                                            0.0f, dTempDt, calStage);
+                    // Measure heating rate during active phases (heater at 100%)
+                    bresenhamPID.measureRampRate(dTempDt, bresenhamPID.getOutput(), calStage);
+                    bresenhamPID.measureDeadtime(bresenhamPID.getOutput(), dTempDt, calStage);
                 } else if (calPhase == 4) {
                     bresenhamPID.setOutput(0);
                     bresenhamPID.setAIGains(0, 0, 0);
                     float ckp = 2.0f, cki = 0.03f, ckd = 1.0f;
                     bresenhamPID.setCoolingGains(ckp, cki, ckd);
-                    bresenhamPID.runCoolingPID(AMBIENT_TEMP, avg);
+                    bresenhamPID.runCoolingPID(AMBIENT_TEMP, avg,
+                                               0.0f, dTempDt, calStage);
+                    // Measure natural cooling rate
+                    bresenhamPID.measureRampRate(dTempDt, 0, calStage);
+                    // Track time from peak to CAL_COOLDOWN_TEMP for profile total time
+                    if (calCooldownTime == 0 && avg <= (float)CAL_COOLDOWN_TEMP) {
+                        calCooldownTime = profileTimerSeconds - calPeakReachedSec - CAL_PEAK_HOLD_S;
+                        if (calCooldownTime < 10) calCooldownTime = 10;
+                    }
                     if (avg < 50.0f) {
                         int newRamp = max(30, (int)(calPreheatTime * CAL_RUN_MARGIN));
                         int newSoak = max(30, (int)(calSoakTime * CAL_RUN_MARGIN));
                         int newReflow = max(20, (int)(calReflowTime * CAL_RUN_MARGIN));
                         int newHold = 30;
+                        int newCooldown = max(CAL_COOLDOWN_MIN, (int)(calCooldownTime * CAL_RUN_MARGIN));
 
                         if (calTargetRecipeIndex >= 0 && calTargetRecipeIndex < storedRecipeCount) {
                             recipes[calTargetRecipeIndex].preheatRampTime = newRamp;
                             recipes[calTargetRecipeIndex].soakTime = newSoak;
                             recipes[calTargetRecipeIndex].reflowTime = newReflow;
                             recipes[calTargetRecipeIndex].peakHoldTime = newHold;
+                            recipes[calTargetRecipeIndex].cooldownTime = newCooldown;
                             saveRecipeToNvs(calTargetRecipeIndex);
                         }
+
+                        // Save measured plant model to global NVS
+                        saveGlobalPlantModel();
+                        Serial.println("Plant model calibrated and saved.");
 
                         currentSystemState = STATE_CAL_COMPLETE;
                         profileTimerSeconds = 0;
                         bresenhamPID.reset();
+                        calDeadtimeResetDone = false;
                         xSemaphoreGive(recipeMutex);
                         continue;
                     }
@@ -639,7 +718,7 @@ void core0ControlLoop(void *pvParameters) {
                 telemetry.currentSeconds = profileTimerSeconds;
                 telemetry.bresenhamDuty = bresenhamPID.getOutput();
                 telemetry.coolingOutput = bresenhamPID.getCoolingOutput();
-                telemetry.currentStage = (ProfileStage)calPhase;
+                telemetry.currentStage = calStage;
                 telemetry.systemState = state;
                 telemetry.errorCode = 0;
 
@@ -650,7 +729,9 @@ void core0ControlLoop(void *pvParameters) {
             } else {
                 profileTimerSeconds = 0;
                 bresenhamPID.reset();
+                tempReader.resetFilter();
                 prevStage = STAGE_COMPLETE;
+                lastAvgTemp = AMBIENT_TEMP;
             }
 
             xSemaphoreGive(recipeMutex);
@@ -734,6 +815,7 @@ void core1UITask(void *pvParameters) {
                             newRecipe.soakTime = profileCreateValues[4];
                             newRecipe.reflowTime = profileCreateValues[5];
                             newRecipe.peakHoldTime = profileCreateValues[6];
+                            newRecipe.cooldownTime = 0;
                             newRecipe.bakeTemp = 0;
                             newRecipe.bakeDuration = 0;
 
@@ -794,6 +876,7 @@ void core1UITask(void *pvParameters) {
                             bakeTotalSeconds = bakeTargetDurationMin * 60;
                             profileTimerSeconds = 0;
                             bresenhamPID.reset();
+                            tempReader.resetFilter();
                             bresenhamPID.setAIGains(1.6f, 0.075f, 0.6f);
                             bresenhamPID.setCoolingGains(0.5f, 0.005f, 0.2f);
                             aiTuner.setBaseGains(1.6f, 0.075f, 0.6f);
@@ -935,6 +1018,7 @@ void core1UITask(void *pvParameters) {
                             calSoakTime = 0;
                             calReflowTime = 0;
                             calPeakReachedSec = 0;
+                            calCooldownTime = 0;
                             bresenhamPID.reset();
                             currentSystemState = STATE_CAL_RUNNING;
                             xSemaphoreGive(recipeMutex);
@@ -968,6 +1052,7 @@ void core1UITask(void *pvParameters) {
                         aiTuner.setCoolingBaseGains(ckp, cki, ckd);
 
                         bresenhamPID.reset();
+                        tempReader.resetFilter();
                         currentSystemState = STATE_RUNNING;
                         xSemaphoreGive(recipeMutex);
                         buzzer.trigger(BUZZER_PHASE_TRANSITION);
@@ -1027,6 +1112,7 @@ void core1UITask(void *pvParameters) {
                                 aiTuner.setCoolingBaseGains(ckp, cki, ckd);
 
                                 bresenhamPID.reset();
+                                tempReader.resetFilter();
                                 currentSystemState = STATE_RUNNING;
                                 xSemaphoreGive(recipeMutex);
                                 buzzer.trigger(BUZZER_PHASE_TRANSITION);
@@ -1161,7 +1247,7 @@ void core1UITask(void *pvParameters) {
             case STATE_CAL_COMPLETE: {
                 if (calTargetRecipeIndex >= 0 && calTargetRecipeIndex < storedRecipeCount) {
                     const ReflowRecipe &r = recipes[calTargetRecipeIndex];
-                    display.renderCalComplete(r.name, r.preheatRampTime, r.soakTime, r.reflowTime, r.peakHoldTime);
+                    display.renderCalComplete(r.name, r.preheatRampTime, r.soakTime, r.reflowTime, r.peakHoldTime, r.cooldownTime);
                 }
                 if (isSShortPress() ||
                     buttonDebouncer.isPressed(buttonDebouncer.btnEStop)) {

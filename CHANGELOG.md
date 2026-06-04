@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-06-03
+
+### Added
+- **EMA temperature filtering**: `TemperatureReader` applies a 1-pole exponential moving average (α=0.15) on each thermocouple reading, removing ~85% of high-frequency LSB noise before it reaches the PID derivative term. Filter resets on each cycle start; fault detection still reads the raw value for safety.
+- **Target ramp rate**: `ProfileEngine::getTargetRampRate()` returns the instantaneous target temperature ramp rate (°C/s) for any elapsed second in a reflow profile, enabling feedforward control.
+- **Feedforward control**: `BresenhamPID::computeFeedforward()` adds a pre-emptive power term based on `dTargetDt / heatingRate[zone] × 256`, so the PID loop only corrects residual error. Capped at 80% max output to prevent runaway. `computeCoolingFeedforward()` activates proportional cooling only when the target drops faster than the natural cooling rate.
+- **Plant model calibration**: Calibration routine calls `measureRampRate()` per phase and `measureDeadtime()` on the first heater step to measure per-zone heating rates, natural cooling rates, and thermal deadtime. Plant model stored globally in NVS (not per-recipe-per-zone) via `saveGlobalPlantModel()` / `loadGlobalPlantModel()` with `phr0-4`, `pcr0-4`, `pdt` NVS keys.
+- **Cooldown time measurement**: Calibration run measures the time from peak temperature to 120°C (`CAL_COOLDOWN_TEMP`). This `cooldownTime` is saved per-recipe in NVS (key `r{N}_cool`) and used in `ProfileEngine::getTotalDuration()` for accurate profile total time calculation.
+- **Config.h**: Added `CAL_COOLDOWN_TEMP` (120), `CAL_COOLDOWN_MIN` (30) constants.
+- **SharedData.h**: Added `cooldownTime` field to `ReflowRecipe` struct.
+- **DisplayRenderer**: `renderCalComplete()` shows "Cool:" time (peak→120°C) instead of "Hold:".
+- **Calibration complete display**: Shows Ramp, Soak, Reflow, and Cool segment times with margins applied.
+
+### Changed
+- `ProfileEngine::getTotalDuration()` now uses `recipe.cooldownTime` instead of hardcoded 60s cooldown.
+- `rename_firmware.py`: now parses `FIRMWARE_VERSION` from `src/Config.h` dynamically instead of hardcoding the version string.
+- `BresenhamPID::measureRampRate()` and `measureDeadtime()` moved to public; removed continuous measurement calls from `runPIDLoop` — measurement only occurs during calibration.
+- `main.cpp`: Removed `savePlantModelForRecipeZone()` / `loadPlantModelForRecipeZone()`; added `saveGlobalPlantModel()` / `loadGlobalPlantModel()`.
+- Calibration routine tracks `calCooldownTime` from peak temperature to 120°C and saves to NVS with 1.2x safety margin.
+
+### Fixed
+- Derivative term no longer sees raw ADC jitter (EMA filter applied first).
+- Profile total time now reflects actual measured cooldown performance.
+- Firmware version no longer duplicated in build script.
+
 ## [1.9.0] — 2026-05-31
 
 ### Added

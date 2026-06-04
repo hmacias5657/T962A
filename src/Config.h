@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define FIRMWARE_VERSION "1.9.0"
+#define FIRMWARE_VERSION "2.0.0"
 
 // T962A pin mappings (ESP32 WROOM)
 #define PIN_ZC_INTERRUPT       GPIO_NUM_4
@@ -119,5 +119,7 @@
 #define CAL_OFFSET_STEP_INT     5
 #define CAL_RUN_MARGIN          1.2f
 #define CAL_PEAK_HOLD_S         10
+#define CAL_COOLDOWN_TEMP       120
+#define CAL_COOLDOWN_MIN        30
 
 #endif

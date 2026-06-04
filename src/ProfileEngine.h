@@ -9,6 +9,7 @@ public:
 
     void begin();
     int calculateTargetTemp(int elapsedSeconds, const ReflowRecipe &recipe);
+    float getTargetRampRate(int elapsedSeconds, const ReflowRecipe &recipe) const;
     ProfileStage getCurrentStage(int elapsedSeconds, const ReflowRecipe &recipe);
     int getTotalDuration(const ReflowRecipe &recipe) const;
 

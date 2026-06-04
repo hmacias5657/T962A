@@ -513,7 +513,7 @@ void DisplayRenderer::renderCalRunning(int targetTemp, float avgTemp, int elapse
     } while (_display.nextPage());
 }
 
-void DisplayRenderer::renderCalComplete(const char *recipeName, int preheatTime, int soakTime, int reflowTime, int holdTime) {
+void DisplayRenderer::renderCalComplete(const char *recipeName, int preheatTime, int soakTime, int reflowTime, int holdTime, int cooldownTime) {
     _display.firstPage();
     do {
         _display.setFont(u8g2_font_6x10_tf);
@@ -541,8 +541,8 @@ void DisplayRenderer::renderCalComplete(const char *recipeName, int preheatTime,
         _display.print("s");
 
         _display.setCursor(60, 42);
-        _display.print("Hold:");
-        _display.print(holdTime);
+        _display.print("Cool:");
+        _display.print(cooldownTime);
         _display.print("s");
 
         _display.setCursor(5, 60);

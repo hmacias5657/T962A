@@ -25,7 +25,8 @@ int ProfileEngine::getTotalDuration(const ReflowRecipe &recipe) const {
     if (recipe.type == RECIPE_BAKE) {
         return recipe.bakeDuration * 60;
     }
-    return getPreheatEnd(recipe) + recipe.soakTime + recipe.reflowTime + recipe.peakHoldTime + 60;
+    int cool = recipe.cooldownTime > 0 ? recipe.cooldownTime : 60;
+    return getPreheatEnd(recipe) + recipe.soakTime + recipe.reflowTime + recipe.peakHoldTime + cool;
 }
 
 int ProfileEngine::calculateTargetTemp(int elapsedSeconds, const ReflowRecipe &recipe) {
@@ -57,6 +58,29 @@ int ProfileEngine::calculateTargetTemp(int elapsedSeconds, const ReflowRecipe &r
     }
 
     return target;
+}
+
+float ProfileEngine::getTargetRampRate(int elapsedSeconds, const ReflowRecipe &recipe) const {
+    if (recipe.type == RECIPE_BAKE) {
+        return 0.0f;
+    }
+
+    int tPreheatEnd = getPreheatEnd(recipe);
+    int tSoakEnd = getSoakEnd(recipe);
+    int tReflowPeak = getReflowPeakEnd(recipe);
+    int tReflowEnd = getReflowEnd(recipe);
+
+    if (elapsedSeconds <= tPreheatEnd) {
+        return (float)(recipe.preheatTemp - AMBIENT_TEMP) / (float)tPreheatEnd;
+    } else if (elapsedSeconds <= tSoakEnd) {
+        return (float)(recipe.soakTemp - recipe.preheatTemp) / (float)recipe.soakTime;
+    } else if (elapsedSeconds <= tReflowPeak) {
+        return (float)(recipe.peakTemp - recipe.soakTemp) / (float)recipe.reflowTime;
+    } else if (elapsedSeconds <= tReflowEnd) {
+        return -(float)(recipe.peakTemp - 150) / (float)recipe.peakHoldTime;
+    } else {
+        return -2.0f;
+    }
 }
 
 ProfileStage ProfileEngine::getCurrentStage(int elapsedSeconds, const ReflowRecipe &recipe) {

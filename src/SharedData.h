@@ -20,6 +20,7 @@ struct ReflowRecipe {
     int soakTime;
     int reflowTime;
     int peakHoldTime;
+    int cooldownTime;
     int bakeTemp;
     int bakeDuration;
 };

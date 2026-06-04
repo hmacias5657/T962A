@@ -4,13 +4,18 @@
 
 This controller automates the reflow soldering process in a T962A oven using an ESP32 with dual thermocouples, multi-zone adaptive PID control, a system cooling fan, a Bresenham-controlled oven cooling fan, and a 128x64 KS0108 GLCD display. It supports reflow profiles and baking/drying profiles with real-time temperature tracking, audible alerts, thermocouple calibration, and emergency stop. Heater and cooling PID coefficients are learned per stage and saved to NVS. The original T962A 5-key membrane (F1–F4, S) is reused with a dedicated hardware E-STOP added.
 
+Key control enhancements in v2.0.0:
+- **EMA filtering**: An exponential moving average filter (α=0.15) removes ~85% of high-frequency noise from thermocouple readings before they reach the PID derivative term, reducing output jitter without adding latency. Fault detection still uses the raw sensor value for safety.
+- **Feedforward control**: The controller pre-computes the heater power needed to follow the desired temperature ramp rate based on the oven's measured heating characteristics. The PID loop only needs to correct the residual error, resulting in faster ramp tracking and less overshoot.
+- **Plant model calibration**: A dedicated calibration run measures the oven's per-zone heating rates, natural cooling rates, and thermal deadtime. These are stored globally in NVS and used by the feedforward controller on all subsequent runs.
+
 ## 2. Getting Started
 
 ### 2.1 Power Up
 1. Ensure mains power to the oven is connected through the zero-cross SSR.
 2. Ensure the oven cooling fan SSR and system cooling fan are wired.
 3. Plug in the 5V supply for the ESP32 controller.
-4. The display shows a splash screen ("Reflow Oven / AI-PID v1.9.0 / Line: XX.X Hz") for 1.5 seconds, then enters the main menu. The line frequency is measured automatically at boot by averaging 40 zero-cross edge timestamps and is persisted in NVS if it differs from the previous measurement.
+4. The display shows a splash screen ("Reflow Oven / AI-PID v2.0.0 / Line: XX.X Hz") for 1.5 seconds, then enters the main menu. The line frequency is measured automatically at boot by averaging 40 zero-cross edge timestamps and is persisted in NVS if it differs from the previous measurement.
 
 ### 2.2 Main Menu
 ```
@@ -129,6 +134,8 @@ The cycle proceeds through these stages automatically:
 | Cooldown | Controlled cooling via oven cooling fan to safe handling temperature |
 
 A short beep sounds at each stage transition. On each transition, the current PID coefficients (Kp, Ki, Kd) for both heater and cooling fan are saved to the exiting zone in NVS, and the stored gains for the entering zone are loaded — the AI tuner then adapts from those starting values.
+
+**Feedforward control**: The controller simultaneously computes a feedforward power term based on the profile's target ramp rate and the oven's measured heating rate. For example, if the profile requires a 1°C/s rise during Reflow Ramp and the oven heats at 2°C/s at 100% output, the feedforward term pre-emptively applies ~50% heater power. The PID loop then corrects only the remaining error, enabling tighter tracking with less overshoot. During the Soak and Peak stages (where dTarget/dt ≈ 0), feedforward is minimal and PID handles regulation.
 
 ### 3.3 Cycle Complete
 When the cooldown phase finishes (temperature below 50°C):
@@ -271,7 +278,7 @@ Kd:0.20
 
 Both heater and cooling PID gains for each zone are displayed and are recipe-specific.
 
-### 6.4 Calibration Run (Auto-Tune Recipe Times)
+### 6.4 Calibration Run (Auto-Tune Recipe Times + Plant Model)
 
 With the cursor on "Cal Run", press **S** (short press) to enter the calibration run confirmation screen:
 
@@ -303,20 +310,22 @@ The run proceeds through 5 phases automatically:
 | Soak | Heats from preheat temp to soak temp; records time |
 | Reflow | Heats from soak temp to peak temp; records time |
 | Hold | Brief 10-second hold at peak temperature |
-| Cooling | Fan cooling until safe temperature |
+| Cooling | Fan cooling until safe temperature — tracks time from peak to 120°C for profile total time |
 
-After cooldown, updated recipe times are displayed:
+During each phase the controller also measures the **plant model** — per-zone heating rates (°C/s at 100% heater output), natural cooling rates, and the thermal deadtime (delay from heater SSR activation to temperature response). These are saved globally to NVS and used by the **feedforward controller** on all subsequent reflow and baking runs.
+
+After cooldown, updated recipe times and the plant model are saved:
 
 ```
 Cal Complete
 ────────────────
 Sn63/Pb37 updated
 Ramp:144s Soak:144s
-Reflow:72s Hold:30s
+Reflow:72s Cool:60s
 [S]=back to menu
 ```
 
-Each measured time is multiplied by a 1.2x safety margin (minimums: Ramp 30s, Soak 30s, Reflow 20s, Hold 30s). The updated recipe is saved to NVS and becomes available for immediate use.
+Each measured time is multiplied by a 1.2x safety margin (minimums: Ramp 30s, Soak 30s, Reflow 20s, Cool 30s). The **Cool** time represents the measured duration from peak temperature down to 120°C and is used in the profile's total time calculation. The updated recipe is saved to NVS and becomes available for immediate use.
 
 The oven must be empty (no PCB) during a calibration run. E-STOP is available at any time.
 

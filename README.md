@@ -7,13 +7,16 @@ AI-enhanced adaptive PID reflow oven temperature controller for the T962A oven, 
 - **Dual-core FreeRTOS**: Core 0 handles thermodynamics (PID, Bresenham, ADC), Core 1 handles UI (display, buttons, buzzer)
 - **Bresenham power distribution**: 256 half-cycle AC power modulation via zero-cross SSR for heater and cooling fan
 - **Multi-zone PID**: 5 independent PID gain sets per recipe (Preheat/Soak/ReflowRamp/ReflowPeak/Cooldown) for both heater and cooling fan, saved per-zone in NVS and loaded on zone transitions
+- **Feedforward control**: Target-ramp-rate feedforward uses measured plant heating/cooling rates to pre-emptively apply heater/cooling power — PID only corrects residual error
+- **Plant model calibration**: Dedicated calibration cycle measures per-zone heating rates (°C/s at 100% output), natural cooling rates, and thermal deadtime; stored globally in NVS and used by feedforward on all subsequent runs
+- **EMA temperature filtering**: 1-pole exponential moving average (α=0.15) removes ~85% of ADC noise from each thermocouple reading before it reaches the PID derivative term; fault detection reads raw value
 - **AI supervisory gain tuner**: Spatial thermal gradient damping with learning heuristic for both heating and cooling; stage tuning natively embedded in per-zone gains
 - **Dual K-type thermocouples**: Synced 12-bit ADS1015 ADC reading via I2C at zero-cross for noise immunity and linearity; per-sensor calibration offset adjustment
 - **128x64 KS0108 GLCD**: Original T962A parallel display driven via U8g2; real-time target vs. actual temperature plot with firmware version and line frequency on splash screen
 - **NVS-persistent recipes and PID gains**: Up to 10 user-created profiles stored in ESP32 NVS; per-zone heater and cooling PID coefficients saved after each cycle
 - **Baking/drying profile**: User-selectable temperature (80–150°C) and duration (1–300 min) for baking solder paste, drying PCBs, or preheating
 - **Configurable settings**: Adjustable max bake duration (1–300 minutes) and °C/°F unit toggle, saved to NVS
-- **Calibration menu**: Per-sensor thermocouple offset adjustment (±10°C, 0.5°C steps), per-zone heater/cooling PID gain viewer, and **Calibration Run** — dry cycle that auto-tunes recipe times to measured oven ramp rates with 1.2x safety margin
+- **Calibration menu**: Per-sensor thermocouple offset adjustment (±10°C, 0.5°C steps), per-zone heater/cooling PID gain viewer, and **Calibration Run** — dry cycle that measures plant dynamics (heating/cooling rates, deadtime) and auto-tunes recipe times including cooldown (peak→120°C) with 1.2x safety margin
 - **8-minute live plot**: Real-time target vs. actual temperature plot with 0–280°C Y-axis and 0–8 minute X-axis, adapts to slow oven thermal gradients
 - **Line frequency auto-calibration**: Measures AC mains frequency at boot by averaging zero-cross ISR timestamps; PID time step and Bresenham window adapt dynamically for 50/60 Hz regions
 - **System cooling fan**: Temperature-proportional PWM via MOSFET (40°C=0% → 80°C=100%) keeps controller electronics cool
@@ -97,19 +100,20 @@ pio device monitor
 ## Project Structure
 
 ```
-├── platformio.ini           # PlatformIO build config (ESP32, U8g2, ADS1X15)
-├── rename_firmware.py       # Post-build script: firmware.bin → firmware_v<VERSION>.bin
+├── Adaptive_Considerations.md # Design reference for adaptive PID, feedforward, ESP-IDF porting
+├── platformio.ini             # PlatformIO build config (ESP32, U8g2, ADS1X15)
+├── rename_firmware.py         # Post-build script: firmware.bin → firmware_v<VERSION>.bin
 src/
-├── main.cpp                 # Entry point, FreeRTOS dual-core task setup
-├── Config.h                 # Pin assignments, constants, limits, firmware version
-├── SharedData.h             # ReflowRecipe, ThermalTelemetry, state enums
-├── BresenhamPID.cpp/.h      # Zero-cross ISR, dual Bresenham channels, PID loop
-├── TemperatureReader.cpp/.h # ADS1015 I2C reading + calibration offsets + fault detection
-├── ProfileEngine.cpp/.h     # 5-stage thermal profile interpolation + bake mode
-├── AITuner.cpp/.h           # Gain scheduler with spatial damping + learning for heater and cooling
-├── DisplayRenderer.cpp/.h   # U8g2 KS0108 GLCD: menus, live plot, bake, settings, calibration
-├── ButtonDebouncer.cpp/.h   # 50ms non-blocking debounce for 5 buttons
-└── Buzzer.cpp/.h            # Audible pattern generator (phase, complete, error)
+├── main.cpp                   # Entry point, FreeRTOS dual-core task setup
+├── Config.h                   # Pin assignments, constants, limits, firmware version
+├── SharedData.h               # ReflowRecipe, ThermalTelemetry, state enums
+├── BresenhamPID.cpp/.h        # Zero-cross ISR, dual Bresenham channels, PID + feedforward
+├── TemperatureReader.cpp/.h   # ADS1015 I2C reading + EMA filter + calibration offsets
+├── ProfileEngine.cpp/.h       # 5-stage thermal profile interpolation + target ramp rate
+├── AITuner.cpp/.h             # Gain scheduler with spatial damping + learning for heater and cooling
+├── DisplayRenderer.cpp/.h     # U8g2 KS0108 GLCD: menus, live plot, bake, settings, calibration
+├── ButtonDebouncer.cpp/.h     # 50ms non-blocking debounce for 5 buttons
+└── Buzzer.cpp/.h              # Audible pattern generator (phase, complete, error)
 ```
 
 ## License

@@ -1,6 +1,8 @@
 #include "TemperatureReader.h"
 
-TemperatureReader::TemperatureReader() : _tc1Offset(0.0f), _tc2Offset(0.0f) {}
+TemperatureReader::TemperatureReader() : _tc1Offset(0.0f), _tc2Offset(0.0f) {
+    resetFilter();
+}
 
 void TemperatureReader::begin() {
     if (!_ads.begin(ADS1015_ADDR)) {
@@ -31,12 +33,24 @@ TemperatureData TemperatureReader::readSensors() {
     int16_t rawTC1 = _ads.readADC_SingleEnded(0);
     int16_t rawTC2 = _ads.readADC_SingleEnded(1);
 
-    data.temp1 = rawToCelsius(rawTC1) + _tc1Offset;
-    data.temp2 = rawToCelsius(rawTC2) + _tc2Offset;
+    float raw1 = rawToCelsius(rawTC1) + _tc1Offset;
+    float raw2 = rawToCelsius(rawTC2) + _tc2Offset;
+
+    if (_firstRead) {
+        _filteredTemp1 = raw1;
+        _filteredTemp2 = raw2;
+        _firstRead = false;
+    } else {
+        _filteredTemp1 = _alpha * raw1 + (1.0f - _alpha) * _filteredTemp1;
+        _filteredTemp2 = _alpha * raw2 + (1.0f - _alpha) * _filteredTemp2;
+    }
+
+    data.temp1 = _filteredTemp1;
+    data.temp2 = _filteredTemp2;
     data.avgTemp = (data.temp1 + data.temp2) / 2.0f;
     data.spatialDelta = fabs(data.temp1 - data.temp2);
-    data.sensor1Fault = (data.temp1 < SENSOR_FAULT_TEMP);
-    data.sensor2Fault = (data.temp2 < SENSOR_FAULT_TEMP);
+    data.sensor1Fault = (raw1 < SENSOR_FAULT_TEMP);
+    data.sensor2Fault = (raw2 < SENSOR_FAULT_TEMP);
 
     return data;
 }

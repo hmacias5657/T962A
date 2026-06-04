@@ -201,3 +201,19 @@ Flash: 5.4%  (355121 / 6553600 bytes)
 - **Splash screen**: Displays "Line: XX.X Hz" below firmware version
 - `Config.h`: Removed `AC_FREQ_HZ`, `BRESENHAM_WINDOW_MS`, `PID_TIME_STEP_S`, `ZC_HALF_CYCLE_US_DEFAULT`; added `DEFAULT_FREQ_HZ`
 - `BresenhamPID`: `calibrateLineFrequency()`, `CAL_CYCLES=40`, `setMeasuredFrequency()`/`getMeasuredFrequency()`
+
+#### v2.0.0 — EMA Filtering, Feedforward Control, Plant Model Calibration
+- **EMA temperature filter**: `TemperatureReader` applies α=0.15 EMA on each TC reading; removes ~85% of high-frequency LSB noise before it reaches PID derivative term; filter resets on each cycle start; fault detection still reads raw value
+- **Target ramp rate**: `ProfileEngine::getTargetRampRate()` returns °C/s of the desired profile at any elapsed second; used as feedforward input
+- **Feedforward control**: `computeFeedforward()` adds `dTargetDt / heatingRate[zone] * 256` to PID output; PID only corrects residual error; capped at 80% max output
+- **Cooling feedforward**: `computeCoolingFeedforward()` activates proportional cooling only when target drops faster than natural cooling rate
+- **Plant model as global property**: Heating rate, cooling rate, and deadtime stored globally in NVS (not per-recipe-per-zone); measured once by calibration test, used by feedforward on all subsequent runs
+- **No continuous re-measurement**: `measureRampRate()` and `measureDeadtime()` called **only during calibration test**, not during normal reflow cycles; prevents estimator windup and false deadtime triggers
+- **Calibration test measures plant**: Calibration routine now calls `measureRampRate()` per phase and `measureDeadtime()` on first heater step; saves global model via `saveGlobalPlantModel()` on completion
+- **Cooldown time measurement**: Calibration run measures time from peak temp to 120°C (`CAL_COOLDOWN_TEMP`); saves to recipe as `cooldownTime` in NVS; used in `ProfileEngine::getTotalDuration()`
+- **SharedData.h**: Added `cooldownTime` field to `ReflowRecipe` struct; `saveRecipeToNvs()`/`loadRecipeFromNvs()` persist `r{N}_cool` key
+- `BresenhamPID`: `measureRampRate()`/`measureDeadtime()` moved to public; added `resetDeadtimeDetection()`; removed continuous measurement calls from `runPIDLoop`
+- `main.cpp`: removed `savePlantModelForRecipeZone()`/`loadPlantModelForRecipeZone()`; added `saveGlobalPlantModel()`/`loadGlobalPlantModel()` with `phr0-4`, `pcr0-4`, `pdt` NVS keys
+- `Adaptive_Considerations.md`: new comprehensive design reference documenting all adaptive PID considerations, feedforward design, calibration test specification, and ESP-IDF porting notes
+- `ProfileEngine.cpp`: `getTotalDuration()` uses `recipe.cooldownTime` instead of hardcoded 60s
+- `DisplayRenderer`: `renderCalComplete()` shows "Cool:" (peak→120°C time) instead of "Hold:"

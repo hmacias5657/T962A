@@ -46,7 +46,7 @@ public:
     void renderZoneGains(int zone, const PidGains &heaterGains, const PidGains &coolingGains);
     void renderCalRunConfirm(const char *recipeName);
     void renderCalRunning(int targetTemp, float avgTemp, int elapsedSec, int phase);
-    void renderCalComplete(const char *recipeName, int preheatTime, int soakTime, int reflowTime, int holdTime);
+    void renderCalComplete(const char *recipeName, int preheatTime, int soakTime, int reflowTime, int holdTime, int cooldownTime);
 
 private:
     U8G2_KS0108_128X64_1 _display;
